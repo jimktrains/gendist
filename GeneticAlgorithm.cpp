@@ -2,15 +2,17 @@
 #include <cmath>
 #include <random>
 #include <vector>
+#include <map>
 
 template <typename Gene>
-struct Mutator;
-
-template <typename Gene>
-struct Crosser;
-
-template <typename Gene>
-struct Objective;
+struct GeneticAlgorithmTypes
+{
+  using Individual = std::vector<Gene>;
+  using Population = std::vector<Individual>;
+  using IndividualPair =
+    std::pair<typename GeneticAlgorithmTypes<Gene>::Individual,
+              typename GeneticAlgorithmTypes<Gene>::Individual>;
+};
 
 class Percentage
 {
@@ -40,9 +42,89 @@ double operator*(T x, Percentage p)
 
 struct GeneticAlgorithmConfig
 {
+  GeneticAlgorithmConfig(int population_size, double mutation_rate,
+                         double crossover_rate)
+    : population_size(population_size)
+    , mutation_rate(mutation_rate)
+    , crossover_rate(crossover_rate)
+  {
+  }
+
   unsigned int population_size;
   Percentage mutation_rate;
   Percentage crossover_rate;
+};
+
+template <typename Gene>
+struct Mutator
+{
+  virtual typename GeneticAlgorithmTypes<Gene>::Individual operator()(
+    typename GeneticAlgorithmTypes<Gene>::Individual individual);
+};
+
+template <typename Gene>
+struct Crosser
+{
+  virtual std::pair<typename GeneticAlgorithmTypes<Gene>::Individual,
+                    typename GeneticAlgorithmTypes<Gene>::Individual>
+  operator()(typename GeneticAlgorithmTypes<Gene>::Individual individual,
+             typename GeneticAlgorithmTypes<Gene>::Individual mate);
+};
+
+template <typename Gene>
+struct Objective
+{
+  virtual int operator()(
+    typename GeneticAlgorithmTypes<Gene>::Individual individual);
+};
+
+struct GaussianMutator : Mutator<double>
+{
+
+  GaussianMutator(double sigma)
+    : rd()
+    , rng(rd())
+    , sigma(sigma)
+  {
+  }
+
+  typename GeneticAlgorithmTypes<double>::Individual operator()(
+    typename GeneticAlgorithmTypes<double>::Individual individual)
+  {
+    typename GeneticAlgorithmTypes<double>::Individual baby;
+
+    for (auto i = individual.begin(); i < individual.end(); i++) {
+      std::normal_distribution<double> g(*i, sigma);
+      baby.push_back(g(rng));
+    }
+
+    return baby;
+  }
+
+private:
+  double sigma;
+  std::random_device rd;
+  std::mt19937 rng;
+};
+
+template <typename Gene>
+struct GenericCrosser : Crosser<Gene>
+{
+  virtual std::pair<typename GeneticAlgorithmTypes<Gene>::Individual,
+                    typename GeneticAlgorithmTypes<Gene>::Individual>
+  operator()(typename GeneticAlgorithmTypes<Gene>::Individual individual,
+             typename GeneticAlgorithmTypes<Gene>::Individual mate)
+  {
+    std::uniform_int_distribution<> dist(0, individual.size() - 1);
+    auto offset = dist(rng);
+    std::swap_ranges(individual.begin(), individual.begin() + offset,
+                     mate.begin());
+    return std::make_pair(individual, mate);
+  }
+
+private:
+  std::random_device rd;
+  std::mt19937 rng;
 };
 
 template <typename Gene>
@@ -72,14 +154,37 @@ struct GeneticAlgorithm
 
   void inevitablePassageOfTime()
   {
+    using Scores =
+      std::map<typename GeneticAlgorithmTypes<Gene>::Individual::iterator,
+          int > ;
+
     /* A simple optimization would be to have two population pools and
      * constantly shift between them instead of reällocating each time
+     *
+     * This would also help with not needing to rescore
      */
-    Population new_population(population.size());
+    Population old_population(population);
+
+    Scores old_scores(population.size());
+
+    for (auto i = old_population.begin(); i < old_population.end(); i++) {
+      old_scores.insert(Scores::value_type(i, objective(*i)));
+    }
 
     std::shuffle(population.begin(), population.end(), rng);
     std::transform(population.begin(), population.begin() + num_mutate,
                    mutator);
+    std::shuffle(population.begin(), population.end(), rng);
+    for (auto i = population.begin(); i < population.end() - 1; i += 2) {
+      typename GeneticAlgorithmTypes<Gene>::IndividualPair pair =
+        crosser(*i, *(i++));
+      population.insert(i, pair->first);
+      population.insert(i++, pair->second);
+    }
+
+    for (auto i = population.begin(); i < population.end(); i++) {
+      old_scores.insert(Scores::value_type(i, objective(*i)));
+    }
   }
 
 private:
@@ -93,72 +198,25 @@ private:
   Population population;
 };
 
-template <typename Gene>
-struct Mutator
+struct AllSame : Objective<double>
 {
-  virtual typename GeneticAlgorithm<Gene>::Individual operator()(
-    typename GeneticAlgorithm<Gene>::Individual individual);
-};
-
-template <typename Gene>
-struct Crosser
-{
-  virtual std::pair<typename GeneticAlgorithm<Gene>::Individual,
-                    typename GeneticAlgorithm<Gene>::Individual>
-  operator()(typename GeneticAlgorithm<Gene>::Individual individual,
-             typename GeneticAlgorithm<Gene>::Individual mate);
-};
-
-template <typename Gene>
-struct Objective
-{
-  virtual int operator()(
-    typename GeneticAlgorithm<Gene>::Population population);
-};
-
-struct GaussianMutator : Mutator<double>
-{
-
-  GaussianMutator(double sigma)
-    : rd()
-    , rng(rd())
-    , sigma(sigma)
+  int operator()(typename GeneticAlgorithmTypes<double>::Individual individual)
   {
-  }
-
-  typename GeneticAlgorithm<double>::Individual operator()(
-    typename GeneticAlgorithm<double>::Individual individual)
-  {
-    typename GeneticAlgorithm<double>::Individual baby;
-
+    double last = individual.at(0);
+    int accum = 0;
     for (auto i = individual.begin(); i < individual.end(); i++) {
-      std::normal_distribution<double> g(*i, sigma);
-      baby.push_back(g(rng));
+      accum += std::ceil(std::abs(last - *i));
     }
+    return accum;
   }
-
-private:
-  double sigma;
-  std::random_device rd;
-  std::mt19937 rng;
 };
 
-template <typename Gene>
-struct GenericCrosser : Crosser<Gene>
+int
+main(int argc, char** argv)
 {
-  virtual std::pair<typename GeneticAlgorithm<Gene>::Individual,
-                    typename GeneticAlgorithm<Gene>::Individual>
-  operator()(typename GeneticAlgorithm<Gene>::Individual individual,
-             typename GeneticAlgorithm<Gene>::Individual mate);
-  {
-    std::uniform_int_distribution<> dist(0, individual.size() - 1);
-    auto offset = dist(rng);
-    std::swap_ranges(individual.begin(), individual.begin() + offset,
-                     mate.begin());
-    return std::make_pair(individual, mate);
-  }
+  GeneticAlgorithmConfig config = GeneticAlgorithmConfig(100, 0.1, 0.2);
+  typename GeneticAlgorithmTypes<double>::Individual prototype = { 10, 20, 30 };
 
-private:
-  std::random_device rd;
-  std::mt19937 rng;
-};
+  GeneticAlgorithm<double>(prototype, config, GaussianMutator(0.5),
+                           GenericCrosser<double>(), AllSame());
+}
