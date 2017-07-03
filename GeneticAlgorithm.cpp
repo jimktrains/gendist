@@ -110,7 +110,7 @@ private:
 template <typename Gene>
 struct GenericCrosser : Crosser<Gene>
 {
-  virtual std::pair<typename GeneticAlgorithmTypes<Gene>::Individual,
+  std::pair<typename GeneticAlgorithmTypes<Gene>::Individual,
                     typename GeneticAlgorithmTypes<Gene>::Individual>
   operator()(typename GeneticAlgorithmTypes<Gene>::Individual individual,
              typename GeneticAlgorithmTypes<Gene>::Individual mate)
